@@ -1,3 +1,0 @@
-[submodule "components/http_server"]
-	path = components/http_server
-	url = https://github.com/igrr/esp32-http-server.git

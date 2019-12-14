@@ -29,6 +29,7 @@
 #include "driver/rtc_io.h"
 #include "driver/periph_ctrl.h"
 #include "esp_intr_alloc.h"
+#define LOG_LOCAL_LEVEL ESP_LOG_DEBUG
 #include "esp_log.h"
 #include "sensor.h"
 #include "sccb.h"
@@ -126,6 +127,10 @@ esp_err_t camera_probe(const camera_config_t* config, camera_model_t* out_camera
         return ESP_ERR_NO_MEM;
     }
 
+    ESP_LOGD(TAG, "Powering camera");
+    gpio_set_direction(config->pin_pwr, GPIO_MODE_OUTPUT);
+    gpio_set_level(config->pin_pwr, 0);
+
     ESP_LOGD(TAG, "Enabling XCLK output");
     camera_enable_out_clock(config);
 
@@ -133,6 +138,7 @@ esp_err_t camera_probe(const camera_config_t* config, camera_model_t* out_camera
     SCCB_Init(config->pin_sscb_sda, config->pin_sscb_scl);
 
     ESP_LOGD(TAG, "Resetting camera");
+    #if 0
     gpio_config_t conf = { 0 };
     conf.pin_bit_mask = 1LL << config->pin_reset;
     conf.mode = GPIO_MODE_OUTPUT;
@@ -142,6 +148,7 @@ esp_err_t camera_probe(const camera_config_t* config, camera_model_t* out_camera
     delay(10);
     gpio_set_level(config->pin_reset, 1);
     delay(10);
+    #endif
 
     ESP_LOGD(TAG, "Searching for camera address");
     /* Probe the sensor */

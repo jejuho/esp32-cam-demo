@@ -32,7 +32,7 @@
 #include "driver/gpio.h"
 #include "camera.h"
 #include "bitmap.h"
-#include "http_server.h"
+#include "simple_http_server.h"
 
 static void handle_grayscale_pgm(http_context_t http_ctx, void* ctx);
 static void handle_rgb_bmp(http_context_t http_ctx, void* ctx);
@@ -84,6 +84,7 @@ void app_main()
         .pin_d7 = CONFIG_D7,
         .pin_xclk = CONFIG_XCLK,
         .pin_pclk = CONFIG_PCLK,
+        .pin_pwr  = 32,
         .pin_vsync = CONFIG_VSYNC,
         .pin_href = CONFIG_HREF,
         .pin_sscb_sda = CONFIG_SDA,

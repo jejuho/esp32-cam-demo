@@ -59,6 +59,8 @@ typedef struct {
     int pin_href;           /*!< GPIO pin for camera HREF line */
     int pin_pclk;           /*!< GPIO pin for camera PCLK line */
 
+    int pin_pwr;
+
     int xclk_freq_hz;       /*!< Frequency of XCLK signal, in Hz */
 
     ledc_timer_t ledc_timer;        /*!< LEDC timer to be used for generating XCLK  */
