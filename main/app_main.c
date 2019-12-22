@@ -54,8 +54,31 @@ static EventGroupHandle_t s_wifi_event_group;
 const int CONNECTED_BIT = BIT0;
 static ip4_addr_t s_ip_addr;
 
+#define GPIO_INPUT_IO_0     14
+static xQueueHandle gpio_evt_queue = NULL;
+
+
 #define CAMERA_FRAME_SIZE FRAMESIZE_UXGA
 
+static void IRAM_ATTR gpio_isr_handler(void* arg)
+{
+    gpio_set_intr_type(GPIO_INPUT_IO_0, GPIO_INTR_DISABLE);
+    uint32_t gpio_num = (uint32_t) arg;
+    xQueueSendFromISR(gpio_evt_queue, &gpio_num, NULL);
+}
+
+static void gpio_task_example(void* arg)
+{
+    uint32_t io_num;
+    for(;;) {
+        if(xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
+            printf("GPIO[%d] intr, val: %d\n", io_num, gpio_get_level(io_num));
+
+            vTaskDelay(5000 / portTICK_PERIOD_MS); // cooldown before new activation possible
+            gpio_set_intr_type(GPIO_INPUT_IO_0, GPIO_INTR_POSEDGE);
+        }
+    }
+}
 
 void app_main()
 {
@@ -68,7 +91,16 @@ void app_main()
         ESP_ERROR_CHECK( nvs_flash_init() );
     }
 
-    //ESP_ERROR_CHECK(gpio_install_isr_service(0));
+    //create a queue to handle gpio event from isr
+    gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
+
+    /* pin config */
+    gpio_set_direction(GPIO_INPUT_IO_0, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(GPIO_INPUT_IO_0, GPIO_PULLDOWN_ONLY);
+    gpio_set_intr_type(GPIO_INPUT_IO_0, GPIO_INTR_POSEDGE);
+
+    //start gpio task
+    xTaskCreate(gpio_task_example, "gpio_task_example", 2048, NULL, 10, NULL);
 
     camera_config_t camera_config = {
         .ledc_channel = LEDC_CHANNEL_0,
@@ -96,11 +128,17 @@ void app_main()
         .fb_count = 1,
     };
 
+    //this will install gpio isr service
+    //so not needed:
+    //ESP_ERROR_CHECK(gpio_install_isr_service(0));
     err = esp_camera_init(&camera_config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Camera init failed with error 0x%x", err);
         return;
     }
+
+    //hook isr handler for specific gpio pin
+    gpio_isr_handler_add(GPIO_INPUT_IO_0, gpio_isr_handler, (void*) GPIO_INPUT_IO_0);
 
     initialise_wifi();
 
