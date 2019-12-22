@@ -9,17 +9,27 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include "sccb.h"
 #include "ov7725.h"
 #include "ov7725_regs.h"
-#include <stdio.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+#if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_ARDUHAL_ESP_LOG)
+#include "esp32-hal-log.h"
+#else
+#include "esp_log.h"
+static const char* TAG = "ov7725";
+#endif
+
 
 static const uint8_t default_regs[][2] = {
     {COM3,          COM3_SWAP_YUV},
     {COM7,          COM7_RES_QVGA | COM7_FMT_YUV},
 
-    {COM4,          0x01}, /* bypass PLL */
-    {CLKRC,         0xC0}, /* Res/Bypass pre-scalar */
+    {COM4,          0x01 | 0x00}, /* bypass PLL (0x00:off, 0x40:4x, 0x80:6x, 0xC0:8x) */
+    {CLKRC,         0x80 | 0x03}, /* Res/Bypass pre-scalar (0x40:bypass, 0x00-0x3F:prescaler PCLK=XCLK/(prescaler + 1)/2 ) */
 
     // QVGA Window Size
     {HSTART,        0x3F},
@@ -31,9 +41,9 @@ static const uint8_t default_regs[][2] = {
     // Scale down to QVGA Resolution
     {HOUTSIZE,      0x50},
     {VOUTSIZE,      0x78},
+    {EXHCH,         0x00},
 
     {COM12,         0x03},
-    {EXHCH,         0x00},
     {TGT_B,         0x7F},
     {FIXGAIN,       0x09},
     {AWB_CTRL0,     0xE0},
@@ -121,7 +131,7 @@ static int reset(sensor_t *sensor)
     SCCB_Write(sensor->slv_addr, COM7, COM7_RESET);
 
     // Delay 10 ms
-    systick_sleep(10);
+    vTaskDelay(10 / portTICK_PERIOD_MS);
 
     // Write default regsiters
     for (i=0, regs = default_regs; regs[i][0]; i++) {
@@ -129,7 +139,7 @@ static int reset(sensor_t *sensor)
     }
 
     // Delay
-    systick_sleep(30);
+    vTaskDelay(30 / portTICK_PERIOD_MS);
 
     return 0;
 }
@@ -138,26 +148,27 @@ static int reset(sensor_t *sensor)
 static int set_pixformat(sensor_t *sensor, pixformat_t pixformat)
 {
     int ret=0;
+    sensor->pixformat = pixformat;
     // Read register COM7
     uint8_t reg = SCCB_Read(sensor->slv_addr, COM7);
 
     switch (pixformat) {
-        case PIXFORMAT_RGB565:
-            reg =  COM7_SET_FMT(reg, COM7_FMT_RGB) | COM7_FMT_RGB565;
-            break;
-        case PIXFORMAT_YUV422:
-        case PIXFORMAT_GRAYSCALE:
-            reg =  COM7_SET_FMT(reg, COM7_FMT_YUV);
-            break;
-        default:
-            return -1;
+    case PIXFORMAT_RGB565:
+        reg =  COM7_SET_RGB(reg, COM7_FMT_RGB565);
+        break;
+    case PIXFORMAT_YUV422:
+    case PIXFORMAT_GRAYSCALE:
+        reg =  COM7_SET_FMT(reg, COM7_FMT_YUV);
+        break;
+    default:
+        return -1;
     }
 
     // Write back register COM7
     ret = SCCB_Write(sensor->slv_addr, COM7, reg);
 
     // Delay
-    systick_sleep(30);
+    vTaskDelay(30 / portTICK_PERIOD_MS);
 
     return ret;
 }
@@ -167,17 +178,31 @@ static int set_framesize(sensor_t *sensor, framesize_t framesize)
     int ret=0;
     uint16_t w = resolution[framesize][0];
     uint16_t h = resolution[framesize][1];
+    uint8_t reg = SCCB_Read(sensor->slv_addr, COM7);
+
+    sensor->status.framesize = framesize;
 
     // Write MSBs
     ret |= SCCB_Write(sensor->slv_addr, HOUTSIZE, w>>2);
     ret |= SCCB_Write(sensor->slv_addr, VOUTSIZE, h>>1);
 
+    ret |= SCCB_Write(sensor->slv_addr, HSIZE, w>>2);
+    ret |= SCCB_Write(sensor->slv_addr, VSIZE, h>>1);
+
     // Write LSBs
-    ret |= SCCB_Write(sensor->slv_addr, EXHCH, ((w&0x3) | ((h&0x1) << 2)));
+    ret |= SCCB_Write(sensor->slv_addr, HREF, ((w&0x3) | ((h&0x1) << 2)));
 
     if (framesize < FRAMESIZE_VGA) {
         // Enable auto-scaling/zooming factors
         ret |= SCCB_Write(sensor->slv_addr, DSPAUTO, 0xFF);
+
+        ret |= SCCB_Write(sensor->slv_addr, HSTART, 0x3F);
+        ret |= SCCB_Write(sensor->slv_addr, VSTART, 0x03);
+
+        ret |= SCCB_Write(sensor->slv_addr, COM7, reg | COM7_RES_QVGA);
+
+        ret |= SCCB_Write(sensor->slv_addr, CLKRC, 0x80 | 0x01);
+
     } else {
         // Disable auto-scaling/zooming factors
         ret |= SCCB_Write(sensor->slv_addr, DSPAUTO, 0xF3);
@@ -186,14 +211,17 @@ static int set_framesize(sensor_t *sensor, framesize_t framesize)
         ret |= SCCB_Write(sensor->slv_addr, SCAL0, 0x00);
         ret |= SCCB_Write(sensor->slv_addr, SCAL1, 0x00);
         ret |= SCCB_Write(sensor->slv_addr, SCAL2, 0x00);
+
+        ret |= SCCB_Write(sensor->slv_addr, HSTART, 0x23);
+        ret |= SCCB_Write(sensor->slv_addr, VSTART, 0x07);
+
+        ret |= SCCB_Write(sensor->slv_addr, COM7, reg & ~COM7_RES_QVGA);
+
+        ret |= SCCB_Write(sensor->slv_addr, CLKRC, 0x80 | 0x03);
     }
 
     // Delay
-    systick_sleep(30);
-
-    if (ret == 0) {
-        sensor->framesize = framesize;
-    }
+    vTaskDelay(30 / portTICK_PERIOD_MS);
 
     return ret;
 }
@@ -202,6 +230,7 @@ static int set_colorbar(sensor_t *sensor, int enable)
 {
     int ret=0;
     uint8_t reg;
+    sensor->status.colorbar = enable;
 
     // Read reg COM3
     reg = SCCB_Read(sensor->slv_addr, COM3);
@@ -225,6 +254,7 @@ static int set_whitebal(sensor_t *sensor, int enable)
     // Read register COM8
     uint8_t reg = SCCB_Read(sensor->slv_addr, COM8);
 
+    sensor->status.awb = enable;
     // Set white bal on/off
     reg = COM8_SET_AWB(reg, enable);
 
@@ -234,6 +264,7 @@ static int set_whitebal(sensor_t *sensor, int enable)
 
 static int set_gain_ctrl(sensor_t *sensor, int enable)
 {
+    sensor->status.agc = enable;
     // Read register COM8
     uint8_t reg = SCCB_Read(sensor->slv_addr, COM8);
 
@@ -246,6 +277,7 @@ static int set_gain_ctrl(sensor_t *sensor, int enable)
 
 static int set_exposure_ctrl(sensor_t *sensor, int enable)
 {
+    sensor->status.aec = enable;
     // Read register COM8
     uint8_t reg = SCCB_Read(sensor->slv_addr, COM8);
 
@@ -258,6 +290,7 @@ static int set_exposure_ctrl(sensor_t *sensor, int enable)
 
 static int set_hmirror(sensor_t *sensor, int enable)
 {
+    sensor->status.hmirror = enable;
     // Read register COM3
     uint8_t reg = SCCB_Read(sensor->slv_addr, COM3);
 
@@ -270,6 +303,7 @@ static int set_hmirror(sensor_t *sensor, int enable)
 
 static int set_vflip(sensor_t *sensor, int enable)
 {
+    sensor->status.vflip = enable;
     // Read register COM3
     uint8_t reg = SCCB_Read(sensor->slv_addr, COM3);
 
@@ -280,10 +314,25 @@ static int set_vflip(sensor_t *sensor, int enable)
     return SCCB_Write(sensor->slv_addr, COM3, reg);
 }
 
+static int init_status(sensor_t *sensor)
+{
+    sensor->status.awb = 0;//get_reg_bits(sensor, BANK_DSP, CTRL1, 3, 1);
+    sensor->status.aec = 0;
+    sensor->status.agc = 0;
+    sensor->status.hmirror = 0;
+    sensor->status.vflip = 0;
+    sensor->status.colorbar = 0;
+    return 0;
+}
+
+static int set_dummy(sensor_t *sensor, int val){ return -1; }
+static int set_gainceiling_dummy(sensor_t *sensor, gainceiling_t val){ return -1; }
+
 int ov7725_init(sensor_t *sensor)
 {
     // Set function pointers
     sensor->reset = reset;
+    sensor->init_status = init_status;
     sensor->set_pixformat = set_pixformat;
     sensor->set_framesize = set_framesize;
     sensor->set_colorbar = set_colorbar;
@@ -293,18 +342,41 @@ int ov7725_init(sensor_t *sensor)
     sensor->set_hmirror = set_hmirror;
     sensor->set_vflip = set_vflip;
 
+    //not supported
+    sensor->set_brightness= set_dummy;
+    sensor->set_saturation= set_dummy;
+    sensor->set_quality = set_dummy;
+    sensor->set_gainceiling = set_gainceiling_dummy;
+    sensor->set_gain_ctrl = set_dummy;
+    sensor->set_exposure_ctrl = set_dummy;
+    sensor->set_hmirror = set_dummy;
+    sensor->set_vflip = set_dummy;
+    sensor->set_whitebal = set_dummy;
+    sensor->set_aec2 = set_dummy;
+    sensor->set_aec_value = set_dummy;
+    sensor->set_special_effect = set_dummy;
+    sensor->set_wb_mode = set_dummy;
+    sensor->set_ae_level = set_dummy;
+    sensor->set_dcw = set_dummy;
+    sensor->set_bpc = set_dummy;
+    sensor->set_wpc = set_dummy;
+    sensor->set_awb_gain = set_dummy;
+    sensor->set_agc_gain = set_dummy;
+    sensor->set_raw_gma = set_dummy;
+    sensor->set_lenc = set_dummy;
+    sensor->set_sharpness = set_dummy;
+    sensor->set_denoise = set_dummy;
+
+
+
+
     // Retrieve sensor's signature
     sensor->id.MIDH = SCCB_Read(sensor->slv_addr, REG_MIDH);
     sensor->id.MIDL = SCCB_Read(sensor->slv_addr, REG_MIDL);
     sensor->id.PID = SCCB_Read(sensor->slv_addr, REG_PID);
     sensor->id.VER = SCCB_Read(sensor->slv_addr, REG_VER);
-
-    // Set sensor flags
-    SENSOR_HW_FLAGS_SET(sensor, SENSOR_HW_FLAGS_VSYNC, 1);
-    SENSOR_HW_FLAGS_SET(sensor, SENSOR_HW_FLAGS_HSYNC, 0);
-    SENSOR_HW_FLAGS_SET(sensor, SENSOR_HW_FLAGS_PIXCK, 1);
-    SENSOR_HW_FLAGS_SET(sensor, SENSOR_HW_FLAGS_FSYNC, 1);
-    SENSOR_HW_FLAGS_SET(sensor, SENSOR_HW_FLAGS_JPEGE, 0);
+    
+    ESP_LOGD(TAG, "OV7725 Attached");
 
     return 0;
 }
