@@ -33,6 +33,8 @@
 #include "esp_camera.h"
 #include "simple_http_server.h"
 
+#include "mqtt_stuffs.h"
+
 static void handle_grayscale_pgm(http_context_t http_ctx, void* ctx);
 static void handle_rgb_bmp(http_context_t http_ctx, void* ctx);
 static void handle_rgb_bmp_stream(http_context_t http_ctx, void* ctx);
@@ -126,6 +128,9 @@ void app_main()
     }
     ESP_LOGI(TAG, "Free heap: %u", xPortGetFreeHeapSize());
     ESP_LOGI(TAG, "Camera demo ready");
+
+    /* publish som sstuffs */
+    mqtt_app_start();
 
 }
 
