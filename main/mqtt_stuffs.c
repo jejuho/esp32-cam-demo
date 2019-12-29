@@ -33,9 +33,14 @@
 
 static const char *TAG = "MQTT_EXAMPLE";
 static esp_mqtt_client_handle_t client;
+static volatile uint8_t app_is_connected = 0;
 
 void mqtt_app_publish_message(char * topic, char* message) {
     int msg_id = esp_mqtt_client_publish(client, topic, message, 0, 1, 0);
+}
+
+uint8_t mqtt_app_is_connected(){
+    return app_is_connected;
 }
 
 static esp_err_t mqtt_event_handler_cb(esp_mqtt_event_handle_t event)
@@ -46,6 +51,7 @@ static esp_err_t mqtt_event_handler_cb(esp_mqtt_event_handle_t event)
     switch (event->event_id) {
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
+            app_is_connected = 1;
             /*
             msg_id = esp_mqtt_client_publish(client, "/topic/qos1", "data_3", 0, 1, 0);
             ESP_LOGI(TAG, "sent publish successful, msg_id=%d", msg_id);
@@ -62,6 +68,7 @@ static esp_err_t mqtt_event_handler_cb(esp_mqtt_event_handle_t event)
             break;
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
+            app_is_connected = 0;
             break;
 
         case MQTT_EVENT_SUBSCRIBED:

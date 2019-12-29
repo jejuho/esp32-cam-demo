@@ -74,7 +74,9 @@ static void gpio_task_example(void* arg)
         if(xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
             printf("GPIO[%d] intr, val: %d\n", io_num, gpio_get_level(io_num));
 
-            mqtt_app_publish_message("/esp_cam/1", "motion");
+            if(mqtt_app_is_connected()) {
+                mqtt_app_publish_message("/esp_cam/1", "motion");
+            }
 
             vTaskDelay(5000 / portTICK_PERIOD_MS); // cooldown before new activation possible
             gpio_set_intr_type(GPIO_INPUT_IO_0, GPIO_INTR_POSEDGE);
@@ -99,7 +101,6 @@ void app_main()
     /* pin config */
     gpio_set_direction(GPIO_INPUT_IO_0, GPIO_MODE_INPUT);
     gpio_set_pull_mode(GPIO_INPUT_IO_0, GPIO_PULLDOWN_ONLY);
-    gpio_set_intr_type(GPIO_INPUT_IO_0, GPIO_INTR_POSEDGE);
 
     //start gpio task
     xTaskCreate(gpio_task_example, "gpio_task_example", 2048, NULL, 10, NULL);
@@ -141,6 +142,7 @@ void app_main()
 
     //hook isr handler for specific gpio pin
     gpio_isr_handler_add(GPIO_INPUT_IO_0, gpio_isr_handler, (void*) GPIO_INPUT_IO_0);
+    gpio_set_intr_type(GPIO_INPUT_IO_0, GPIO_INTR_POSEDGE);
 
     initialise_wifi();
 
